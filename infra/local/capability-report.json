@@ -116,7 +116,7 @@
       "name": "base64 image (vision-fallback)",
       "status": "WARN",
       "detail": "accepted but answered 'gray'",
-      "model": "GoToCompany/gemma3-27b-sahabat-instruct",
+      "model": "<model_provider>/gemma3-27b-sahabat-instruct",
       "latency_s": 0.56,
       "evidence": {
         "reply": "gray"
@@ -242,7 +242,7 @@
       "name": "reach vision-fallback",
       "status": "FAIL",
       "detail": "no response (transport error: 403 Forbidden)",
-      "model": "GoToCompany/gemma3-27b-sahabat-instruct",
+      "model": "<model_provider>/gemma3-27b-sahabat-instruct",
       "latency_s": 2.0,
       "evidence": {}
     }

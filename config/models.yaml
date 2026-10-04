@@ -19,7 +19,7 @@ aliases:
   # is down as of 2026-09-20 — 503, no healthy deployment. Sahabat-AI-v2-70B-R
   # is a Llama derivative, so the pair is OpenAI vs Meta and independence holds.
   reasoner-critic:
-    model: "GoToCompany/Llama-Sahabat-AI-v2-70B-R"
+    model: "<model_provider>/Llama-Sahabat-AI-v2-70B-R"
     params: {temperature: 0}
 
   # Native OpenAI tool calling — P1 PASS, branch A (see capability-report.json).
@@ -62,11 +62,11 @@ aliases:
 # classifies harm categories, not instruction-hijacking, and a clean "safe" from
 # it says nothing about whether the text is trying to steer the agent.
 fallbacks:
-  reasoner-primary: ["GoToCompany/Llama-Sahabat-AI-v2-70B-R"]
-  reasoner-critic: ["GoToCompany/gemma3-27b-sahabat-instruct"]   # Google lineage — still not OpenAI
+  reasoner-primary: ["<model_provider>/Llama-Sahabat-AI-v2-70B-R"]
+  reasoner-critic: ["<model_provider>/gemma3-27b-sahabat-instruct"]   # Google lineage — still not OpenAI
   tool-caller: ["
-  GoToCompany/Llama-Sahabat-AI-v2-70B-IT-awq-4bit"]
-  analyst: ["GoToCompany/gemma3-27b-sahabat-instruct"]
+  <model_provider>/Llama-Sahabat-AI-v2-70B-IT-awq-4bit"]
+  analyst: ["<model_provider>/gemma3-27b-sahabat-instruct"]
   fast-utility: ["Qwen/Qwen3-14B"]
-  vision: ["GoToCompany/gemma3-27b-sahabat-instruct"]
+  vision: ["<model_provider>/gemma3-27b-sahabat-instruct"]
   guard-safety: ["meta-llama/Llama-Guard-3-1B-ct-prod", "meta-llama/Llama-Guard-3-1B"]

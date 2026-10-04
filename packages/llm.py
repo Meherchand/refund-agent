@@ -40,8 +40,7 @@ class LLMUnavailable(RuntimeError):
     """Every alias in the chain failed. The caller degrades — it does not guess."""
 
 
-# Model id substring -> pretraining lineage. Order matters: the Sahabat builds
-# are fine-tunes, so "gemma3-27b-sahabat" is Google and "Llama-Sahabat" is Meta.
+
 _LINEAGE = (
     ("gpt-oss", "openai"), ("openai/", "openai"),
     ("gemma", "google"), ("llama", "meta"),
