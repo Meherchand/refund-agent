@@ -121,6 +121,6 @@ opa test             # via make verify (inside the OPA container)
 ## Stack (local Docker)
 
 Postgres + pgvector · RabbitMQ · MinIO · OPA · mock-commerce · refund-api · case-worker ·
-executor · three MCP servers · GoTo Model Garden (LiteLLM) for models.
+executor · three MCP servers ·  (LiteLLM) for models.
 
-Milestones **L0 → L8** are complete. Optional **L9** is the cloud substrate in `PLANNING.md`.
+
