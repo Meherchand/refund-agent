@@ -1,0 +1,250 @@
+{
+  "generated_at": "2026-09-30T15:53:58.993184+00:00",
+  "base_url": "https://litellm-staging.gopay.sh",
+  "probes_requested": [
+    "P0"
+  ],
+  "probes_completed": [
+    "P0"
+  ],
+  "probes_carried_forward": [
+    "P1",
+    "P1b",
+    "P2a",
+    "P2b",
+    "P2c",
+    "P2d",
+    "P3",
+    "P4",
+    "P5",
+    "P6",
+    "P7",
+    "P7b"
+  ],
+  "partial": false,
+  "decisions": {
+    "collector_branch": "A \u2014 native OpenAI tool calling",
+    "structured_output": "response_format=json_schema",
+    "vision": "unavailable \u2014 image_analyst degrades, cases with photos escalate",
+    "seed_deterministic": true,
+    "reasoning_effort_honoured": false,
+    "pgvector_dim": 1024,
+    "injection_guard_available": false
+  },
+  "results": [
+    {
+      "probe": "P1",
+      "name": "tool calling",
+      "status": "PASS",
+      "detail": "tool_calls returned (function='get_order')",
+      "model": "Qwen/Qwen3-14B",
+      "latency_s": 2.87,
+      "evidence": {
+        "verdict": "native",
+        "branch": "A",
+        "calls": 1
+      }
+    },
+    {
+      "probe": "P1b",
+      "name": "tool result round-trip",
+      "status": "PASS",
+      "detail": "consumed the tool result",
+      "model": "Qwen/Qwen3-14B",
+      "latency_s": 1.31,
+      "evidence": {
+        "reply": "The total for order A-8842 is $240.00, and its status is \"DELIVERED\"."
+      }
+    },
+    {
+      "probe": "P2a",
+      "name": "response_format=json_schema",
+      "status": "PASS",
+      "detail": "valid",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 2.94,
+      "evidence": {
+        "content": "{ \"outcome\": \"APPROVE\", \"confidence\": 0.95, \"reason\": \"Customer has 4 years of tenure, indicating a history of loyalty, and is requesting a refund for a defective item, which is a standard and valid r\u2026"
+      }
+    },
+    {
+      "probe": "P2b",
+      "name": "guided_json (vLLM)",
+      "status": "PASS",
+      "detail": "valid",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 1.52,
+      "evidence": {
+        "content": "{ \"outcome\": \"APPROVE\", \"confidence\": 0.95, \"reason\": \"Customer has 4 years of tenure, indicating a history of loyalty, and is requesting a refund for a defective item, which is a standard and valid r\u2026"
+      }
+    },
+    {
+      "probe": "P2c",
+      "name": "response_format=json_object",
+      "status": "PASS",
+      "detail": "valid",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 1.59,
+      "evidence": {
+        "content": "{ \"outcome\": \"APPROVE\", \"confidence\": 0.95, \"reason\": \"Customer has 4 years of tenure, indicating a history of loyalty, and is requesting a refund for a defective item, which is a standard and valid r\u2026"
+      }
+    },
+    {
+      "probe": "P2d",
+      "name": "prompt only",
+      "status": "PASS",
+      "detail": "valid",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 1.59,
+      "evidence": {
+        "content": "{ \"outcome\": \"APPROVE\", \"confidence\": 0.95, \"reason\": \"Customer has 4 years of tenure, indicating a history of loyalty, and is requesting a refund for a defective item, which is a standard and valid r\u2026"
+      }
+    },
+    {
+      "probe": "P3",
+      "name": "base64 image (vision)",
+      "status": "WARN",
+      "detail": "accepted but answered ''",
+      "model": "Qwen/Qwen3.8-27B",
+      "latency_s": 2.31,
+      "evidence": {
+        "reply": ""
+      }
+    },
+    {
+      "probe": "P3",
+      "name": "base64 image (vision-fallback)",
+      "status": "WARN",
+      "detail": "accepted but answered 'gray'",
+      "model": "GoToCompany/gemma3-27b-sahabat-instruct",
+      "latency_s": 0.56,
+      "evidence": {
+        "reply": "gray"
+      }
+    },
+    {
+      "probe": "P4",
+      "name": "seed determinism",
+      "status": "PASS",
+      "detail": "identical across two seeded calls",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 2.32,
+      "evidence": {
+        "first": "A refund dispute occurs when a customer challenges the validity of a refund, claiming they are entitled to a full or par\u2026",
+        "second": "A refund dispute occurs when a customer challenges the validity of a refund, claiming they are entitled to a full or par\u2026"
+      }
+    },
+    {
+      "probe": "P5",
+      "name": "reasoning effort",
+      "status": "WARN",
+      "detail": "completion_tokens low=437 high=350 \u2014 no clear effect; drop the directive",
+      "model": "openai/gpt-oss-120b",
+      "latency_s": 3.34,
+      "evidence": {
+        "completion_tokens": {
+          "low": 437,
+          "high": 350
+        }
+      }
+    },
+    {
+      "probe": "P6",
+      "name": "embed gte-large-en-v1.5",
+      "status": "PASS",
+      "detail": "dim=1024",
+      "model": "Alibaba-NLP/gte-large-en-v1.5",
+      "latency_s": 0.45,
+      "evidence": {
+        "dim": 1024,
+        "expected": 1024,
+        "numeric": true
+      }
+    },
+    {
+      "probe": "P6",
+      "name": "embed bge-base-en-v1.5",
+      "status": "PASS",
+      "detail": "dim=768",
+      "model": "BAAI/bge-base-en-v1.5",
+      "latency_s": 174.14,
+      "evidence": {
+        "dim": 768,
+        "expected": 768,
+        "numeric": true
+      }
+    },
+    {
+      "probe": "P7",
+      "name": "prompt guard",
+      "status": "FAIL",
+      "detail": "HTTP 404: {\"error\":{\"message\":\"\",\"type\":\"None\",\"param\":\"None\",\"code\":\"404\"}}",
+      "model": "meta-llama-prompt-guard-86m",
+      "latency_s": 0.16,
+      "evidence": {}
+    },
+    {
+      "probe": "P7b",
+      "name": "llama guard (optional)",
+      "status": "SKIP",
+      "detail": "HTTP 404: {\"error\":{\"message\":\"litellm.NotFoundError: NotFoundError: OpenAIException - Error code: 404No fallback model group foun\u2026",
+      "model": "meta-llama/Llama-Guard-3-1B",
+      "latency_s": 0.97,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach reasoner-primary",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "openai/gpt-oss-120b",
+      "latency_s": 1.83,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach reasoner-critic",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "Kimi/Kimi-K2-Instruct",
+      "latency_s": 2.02,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach tool-caller",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "Qwen/Qwen3-14B",
+      "latency_s": 1.99,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach fast-utility",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "Qwen/Qwen3-8B",
+      "latency_s": 1.98,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach vision",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "Qwen/Qwen3.8-27B",
+      "latency_s": 2.0,
+      "evidence": {}
+    },
+    {
+      "probe": "P0",
+      "name": "reach vision-fallback",
+      "status": "FAIL",
+      "detail": "no response (transport error: 403 Forbidden)",
+      "model": "GoToCompany/gemma3-27b-sahabat-instruct",
+      "latency_s": 2.0,
+      "evidence": {}
+    }
+  ]
+}

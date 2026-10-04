@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Return request</title>
+<style>
+  :root { --fg:#111; --mut:#666; --line:#ddd; --ok:#0a7; --warn:#c60; }
+  body { font:15px/1.5 system-ui,sans-serif; color:var(--fg); max-width:640px; margin:3rem auto; padding:0 1rem; }
+  h1 { font-size:1.3rem; } label { display:block; margin:.7rem 0 .2rem; font-size:.85rem; color:var(--mut); }
+  input,select,textarea,button { font:inherit; width:100%; padding:.45rem; border:1px solid var(--line); border-radius:4px; }
+  button { background:var(--fg); color:#fff; border:0; margin-top:1rem; cursor:pointer; }
+  .row { display:flex; gap:.7rem; } .row>* { flex:1; }
+  #status { display:none; } pre { background:#f6f6f6; padding:.8rem; border-radius:4px; overflow:auto; font-size:.8rem; }
+  .pill { display:inline-block; padding:.15rem .6rem; border-radius:99px; background:#eee; font-size:.8rem; }
+  .done { background:#dff5ec; color:var(--ok); } .hold { background:#fdf0e3; color:var(--warn); }
+  .steps { list-style:none; padding:0; } .steps li { color:var(--mut); }
+  .steps li.on { color:var(--fg); font-weight:600; }
+</style>
+
+<div id="form">
+  <h1>Request a return</h1>
+  <label>Prefill from a seeded case</label>
+  <select id="sample"><option value="">— choose a planted pattern —</option></select>
+  <div class="row">
+    <div><label>Order</label><input id="order_id"></div>
+    <div><label>Customer</label><input id="customer_id"></div>
+  </div>
+  <div class="row">
+    <div><label>Reason</label><select id="reason_code"></select></div>
+    <div><label>Amount</label><input id="amount" type="number" step="0.01"></div>
+  </div>
+  <label>What happened?</label>
+  <textarea id="description" rows="3"></textarea>
+  <button id="go">Submit</button>
+  <p style="color:var(--mut);font-size:.8rem">
+    Tip: put <code>BOOM</code> in the description to force a worker failure and watch the
+    message land in <code>case-events.dlq</code>.
+  </p>
+</div>
+
+<div id="status">
+  <h1>Return <span id="pill" class="pill">…</span></h1>
+  <ul class="steps">
+    <li data-s="RECEIVED">Received</li>
+    <li data-s="EVIDENCE_GATHERING">Reviewing your request</li>
+    <li data-s="AUTO_APPROVED">Approved</li>
+    <li data-s="REFUNDED">Refunded</li>
+  </ul>
+  <pre id="raw"></pre>
+</div>
+
+<script>
+const REASONS = ["DAMAGED","DEFECTIVE","NOT_AS_DESCRIBED","WRONG_ITEM","DIDNT_FIT",
+                 "CHANGED_MIND","NEVER_ARRIVED","MISSING_PARTS"];
+const $ = id => document.getElementById(id);
+REASONS.forEach(r => $("reason_code").add(new Option(r, r)));
+
+let samples = [];
+fetch("/v1/samples").then(r => r.json()).then(rows => {
+  samples = rows;
+  rows.forEach((s, i) => $("sample").add(new Option(s.pattern, i)));
+});
+$("sample").onchange = e => {
+  const s = samples[e.target.value]; if (!s) return;
+  for (const k of ["order_id","customer_id","reason_code","description","amount"]) $(k).value = s[k];
+};
+
+$("go").onclick = async () => {
+  $("go").disabled = true;
+  const body = {source: "form"};
+  for (const k of ["order_id","customer_id","reason_code","description"]) body[k] = $(k).value;
+  body.amount = $("amount").value || "0";
+  const r = await fetch("/v1/returns", {method:"POST", headers:{"Content-Type":"application/json"},
+                                        body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) { alert(JSON.stringify(j)); $("go").disabled = false; return; }
+  history.pushState({}, "", "/c/" + j.case_id);
+  watch(j.case_id);
+};
+
+const TERMINAL = ["REFUNDED","REJECTED","EXPIRED","FAILED"];
+async function watch(id) {
+  $("form").style.display = "none";
+  $("status").style.display = "block";
+  for (;;) {
+    const c = await (await fetch("/v1/cases/" + id)).json();
+    $("pill").textContent = c.status;
+    $("pill").className = "pill " + (c.status === "REFUNDED" ? "done"
+                                     : TERMINAL.includes(c.status) ? "hold" : "");
+    const order = ["RECEIVED","EVIDENCE_GATHERING","AUTO_APPROVED","REFUNDED"];
+    const at = order.indexOf(c.status);
+    document.querySelectorAll(".steps li").forEach((li, i) =>
+      li.classList.toggle("on", at >= 0 && i <= at));
+    $("raw").textContent = JSON.stringify(c, null, 2);
+    if (TERMINAL.includes(c.status)) return;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+const m = location.pathname.match(/^\/c\/(.+)$/);
+if (m) watch(m[1]);
+</script>

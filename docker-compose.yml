@@ -1,0 +1,229 @@
+# L0: infra + the mocked upstream. No app services, no case-worker, no LLM.
+# Later milestones add services to the `core` profile; nothing here changes.
+#
+# Why AWS_* variables appear in a stack with no cloud: MinIO implements the S3
+# API and we talk to it with boto3, whose credential convention *is* AWS_*.
+# There is no AWS account, the keys are MinIO's own, and S3_ENDPOINT_URL points
+# at the container next door. See PLANNING-LOCAL.md §7.
+name: refund-agent
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://refund:refund@postgres:5432/refund
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_PUBLIC_URL: http://127.0.0.1:${MINIO_PORT:-9000}
+  S3_BUCKET: refund-evidence
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  AWS_DEFAULT_REGION: us-east-1
+  OPA_URL: http://opa:8181
+  COMMERCE_URL: http://mock-commerce:8010
+  # The model gateway. Both come from .env — never committed, never defaulted
+  # here, and the key is read from the environment at call time rather than
+  # baked into the image.
+  LLM_BASE_URL: ${LLM_BASE_URL}
+  LITELLM_API_KEY: ${LITELLM_API_KEY}
+  MODELS_CONFIG: /app/config/models.yaml
+  # A cold start on the shared fleet is routinely 90-180s; a warm call is <1s.
+  LLM_TIMEOUT: ${LLM_TIMEOUT:-120}
+  # Per-node wall-clock ceilings (L3). These bound a *stall*, not a slow call:
+  # a cold model taking 140s is fine, a node that never returns is not, and
+  # without them three stalled cases fill the prefetch and stop the worker.
+  NODE_BUDGET_S: ${NODE_BUDGET_S:-240}
+  COLLECTOR_BUDGET_S: ${COLLECTOR_BUDGET_S:-600}
+  # Ceiling on the frozen bundle. Over it, fragments are trimmed in priority
+  # order and the case escalates rather than the proposer reading a bundle it
+  # cannot tell was trimmed.
+  BUNDLE_MAX_BYTES: ${BUNDLE_MAX_BYTES:-120000}
+  # direct | mcp — §4A. `direct` keeps L2's HTTP path for debugging, and cannot
+  # produce an auto-approval because nothing independent logs its tool calls.
+  TOOL_PROVIDER: ${TOOL_PROVIDER:-mcp}
+  MCP_COMMERCE_URL: http://mcp-commerce:9101/mcp
+  MCP_EVIDENCE_URL: http://mcp-evidence:9101/mcp
+  MCP_POLICY_URL: http://mcp-policy:9101/mcp
+
+# The three MCP servers are one image parameterised by MCP_DOMAIN (§4A), so
+# everything except the domain, its credentials and its host port is shared.
+# All three listen on 9101 inside their own network namespace; the distinct host
+# ports exist only so `mcp-commerce` can be explored by hand from Claude
+# Desktop.
+x-mcp: &mcp
+  build: {context: ., dockerfile: Dockerfile}
+  command: ["python", "-m", "mcp_servers.server"]
+  healthcheck:
+    test: ["CMD", "python", "-c",
+           "import socket; socket.create_connection(('127.0.0.1', 9101), 2).close()"]
+    interval: 5s
+    retries: 20
+  profiles: [core]
+
+# Every domain holds this and nothing else of the refund database: INSERT on
+# mcp_access_log, no UPDATE, no DELETE, no SELECT. See infra/local/mcp-roles.sql.
+x-mcp-env: &mcp-env
+  MCP_PORT: "9101"
+  MCP_LOG_DSN: postgresql://mcp_logger:${MCP_LOG_PW}@postgres:5432/refund
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: refund
+      POSTGRES_PASSWORD: refund
+      POSTGRES_DB: refund
+    ports: ["${PG_PORT:-5432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U refund"]
+      interval: 5s
+      retries: 10
+    profiles: [core]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["${RABBIT_PORT:-5672}:5672", "${RABBIT_MGMT_PORT:-15672}:15672"]
+    # No definitions.json: importing definitions on a blank node suppresses
+    # default user creation, leaving zero users and a broken amqp:// URL. The
+    # exchanges, queues and DLX bindings are declared idempotently by the
+    # consumer at L1 instead.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 10
+    profiles: [core]
+
+  minio:
+    # quay.io, not Docker Hub: docker.io/minio/minio now refuses anonymous pulls.
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Presigned URLs are handed to a browser, so they must not say "minio:9000".
+      MINIO_SERVER_URL: http://127.0.0.1:${MINIO_PORT:-9000}
+    ports: ["${MINIO_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
+    volumes: ["miniodata:/data"]
+    # No healthcheck: nothing depends_on minio, and `make verify` probes
+    # /minio/health/live from the host anyway.
+    profiles: [core]
+
+  opa:
+    image: openpolicyagent/opa:0.68.0
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "--log-level", "info", "/policy"]
+    volumes: ["./policy/rego:/policy:ro"]
+    ports: ["${OPA_PORT:-8181}:8181"]
+    healthcheck:
+      test: ["CMD", "/opa", "version"]
+      interval: 10s
+      retries: 5
+    profiles: [core]
+
+  refund-api:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["uvicorn", "services.refund_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    ports: ["${API_PORT:-8000}:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    profiles: [core]
+
+  # Hosts the decision graph. Serves no HTTP and holds no credentials that can
+  # move money — see PLANNING-LOCAL.md §3.2.
+  case-worker:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "-m", "services.case_worker.main"]
+    environment:
+      <<: *app-env
+      MAX_CONCURRENT_CASES: "3"
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      mock-commerce: {condition: service_started}
+      # Healthy, not started: MCPToolProvider asks each server for its tool list
+      # at boot and exits if one does not answer.
+      mcp-commerce: {condition: service_healthy}
+      mcp-evidence: {condition: service_healthy}
+      mcp-policy: {condition: service_healthy}
+    profiles: [core]
+
+  # Separate on purpose (§3.3): the only writer of refund_attempts/ledger_entries.
+  executor:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "-m", "services.executor.main"]
+    environment: *app-env
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    profiles: [core]
+
+  # The mocked upstream commerce platform (PLANNING.md §6.4). A hard trust
+  # boundary: swapping it for a real API must require no agent changes.
+  mock-commerce:
+    build:
+      context: .
+      dockerfile: services/mock_commerce/Dockerfile
+    environment: *app-env
+    ports: ["${MOCK_PORT:-8010}:8010"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    profiles: [core]
+
+  # --- MCP servers, one per trust domain (§4A) ------------------------------
+  # In `core` and not their own profile, though §8 planned otherwise: from L2.5
+  # the gate will not auto-approve evidence these did not log, so they are not
+  # an optional extra any more.
+
+  # No database credential at all: it reads through mock-commerce, which is the
+  # trust boundary. A read-only role on the commerce tables would have bypassed
+  # it and made the mock harder to swap for a real API.
+  mcp-commerce:
+    <<: *mcp
+    environment:
+      <<: *mcp-env
+      MCP_DOMAIN: commerce
+      COMMERCE_URL: http://mock-commerce:8010
+    ports: ["${MCP_COMMERCE_PORT:-9101}:9101"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      mock-commerce: {condition: service_started}
+
+  # The only process holding object-store credentials, and it confines every
+  # read to the case prefix on its own session.
+  mcp-evidence:
+    <<: *mcp
+    environment:
+      <<: *mcp-env
+      MCP_DOMAIN: evidence
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: refund-evidence
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_EVIDENCE_KEY: ${MINIO_EVIDENCE_KEY:-}
+      MINIO_EVIDENCE_SECRET: ${MINIO_EVIDENCE_SECRET:-}
+    ports: ["${MCP_EVIDENCE_PORT:-9102}:9101"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # SELECT on policy_clauses and nothing else — it cannot read an order. Holds a
+  # gateway key as well, because it embeds the query itself (§4A, L2.6): the cost
+  # is that a compromise here can spend tokens, against the alternative of
+  # letting any caller search by a vector of its own choosing.
+  mcp-policy:
+    <<: *mcp
+    environment:
+      <<: *mcp-env
+      MCP_DOMAIN: policy
+      MCP_POLICY_DSN: postgresql://mcp_policy_ro:${MCP_POLICY_PW}@postgres:5432/refund
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
+      MODELS_CONFIG: /app/config/models.yaml
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-120}
+    ports: ["${MCP_POLICY_PORT:-9103}:9101"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  miniodata:

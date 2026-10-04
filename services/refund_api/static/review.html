@@ -1,0 +1,131 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Review queue</title>
+<style>
+  :root { --fg:#111; --mut:#666; --line:#ddd; --ok:#0a7; --warn:#c60; --bad:#c22; }
+  body { font:14px/1.5 system-ui,sans-serif; color:var(--fg); margin:0; }
+  header { display:flex; gap:1rem; align-items:center; padding:.7rem 1rem; border-bottom:1px solid var(--line); }
+  header h1 { font-size:1.1rem; margin:0; flex:1; }
+  main { display:grid; grid-template-columns:minmax(320px,1fr) 2fr; min-height:calc(100vh - 50px); }
+  #queue { border-right:1px solid var(--line); overflow:auto; }
+  #queue div { padding:.5rem 1rem; border-bottom:1px solid var(--line); cursor:pointer; }
+  #queue div:hover, #queue div.on { background:#f4f4f4; }
+  #detail { padding:1rem 1.5rem; overflow:auto; }
+  .mut { color:var(--mut); font-size:.85em; } .pill { display:inline-block; padding:.1rem .5rem; border-radius:99px; background:#eee; font-size:.8em; }
+  .warn { background:#fdf0e3; color:var(--warn); } .bad { background:#fde8e8; color:var(--bad); } .ok { background:#dff5ec; color:var(--ok); }
+  h2 { font-size:1rem; margin:1.4rem 0 .4rem; } pre { background:#f6f6f6; padding:.6rem; border-radius:4px; overflow:auto; font-size:.78rem; max-height:16rem; }
+  details { border-bottom:1px solid var(--line); padding:.3rem 0; } summary { cursor:pointer; }
+  select,button { font:inherit; padding:.35rem .6rem; } button { cursor:pointer; }
+  .banner { padding:.6rem .8rem; border-radius:4px; margin:.6rem 0; }
+  @media (max-width:760px) { main { grid-template-columns:1fr; } #queue { max-height:40vh; } }
+</style>
+
+<header>
+  <h1>Review queue</h1>
+  <span id="kill"></span>
+  <span id="who" class="mut"></span>
+</header>
+<main>
+  <section id="queue"></section>
+  <section id="detail"><p class="mut">Pick a case.</p></section>
+</main>
+
+<script>
+const REASONS = {APPROVE: ["EVIDENCE_SUFFICIENT","POLICY_EXCEPTION","GOODWILL"],
+                 REJECT:  ["POLICY_NOT_MET","FRAUD_SUSPECTED","INSUFFICIENT_EVIDENCE"]};
+const $ = id => document.getElementById(id);
+// Customer text is untrusted and is rendered here: escape everything.
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const get = async url => { const r = await fetch(url); if (!r.ok) throw new Error(await r.text()); return r.json(); };
+const post = (url, body) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"},
+                                        body: JSON.stringify(body)});
+let me = null;
+
+async function header() {
+  me = await get("/v1/review/me");
+  $("who").textContent = `${me.email} (${me.role})`;
+  const rows = await get("/v1/admin/kill-switch");
+  const g = rows.find(r => r.scope === "global");
+  const on = !!(g && g.active);
+  $("kill").innerHTML = `<span class="pill ${on ? "bad" : "ok"}">kill switch ${on ? "ON" : "off"}</span> ` +
+    (me.role === "admin" ? `<button id="flip">${on ? "Turn off" : "Turn on"}</button>` : "");
+  if (me.role === "admin") $("flip").onclick = async () => {
+    const reason = prompt(on ? "Why turn it off?" : "Why stop all automatic refunds?");
+    if (!reason) return;
+    const r = await post("/v1/admin/kill-switch", {scope: "global", active: !on, reason});
+    if (!r.ok) alert(await r.text());
+    header();
+  };
+}
+
+async function queue() {
+  const rows = await get("/v1/review/queue");
+  $("queue").innerHTML = rows.length ? "" : `<p class="mut" style="padding:1rem">Nothing waiting.</p>`;
+  for (const c of rows) {
+    const d = document.createElement("div");
+    const due = c.sla_due_at ? new Date(c.sla_due_at) : null;
+    const hrs = due ? Math.round((due - Date.now()) / 36e5) : null;
+    d.innerHTML = `<b>${esc(c.reason_code)}</b> ${esc(c.amount)} ${esc(c.currency)}
+      <span class="pill">${esc(c.rule_id || "no gate row")}</span>
+      ${c.critic_dissents ? '<span class="pill warn">critic dissents</span>' : ""}
+      ${c.safety_flagged ? '<span class="pill bad">content warning</span>' : ""}
+      <div class="mut">${esc(c.id)} · ${hrs === null ? "no SLA" : hrs >= 0 ? `due in ${hrs}h` : `overdue ${-hrs}h`}</div>`;
+    d.onclick = () => { document.querySelectorAll("#queue div.on").forEach(e => e.classList.remove("on"));
+                        d.classList.add("on"); show(c.id); };
+    $("queue").appendChild(d);
+  }
+}
+
+async function show(id) {
+  const v = await get("/v1/review/cases/" + id);
+  const c = v.case, g = v.gate, r = v.recommendation, k = v.critique, b = v.bundle;
+  const pending = c.status === "PENDING_REVIEW";
+  $("detail").innerHTML = `
+    <h1 style="font-size:1.1rem">${esc(c.reason_code)} · ${esc(c.amount)} ${esc(c.currency)}
+      <span class="pill">${esc(c.status)}</span></h1>
+    <div class="mut">case ${esc(c.id)} · order ${esc(c.order_id)} · customer ${esc(c.customer_id)}</div>
+    ${c.safety_flagged ? `<div class="banner bad">Content warning: the customer's text was flagged as abusive.</div>` : ""}
+    ${c.injection_flagged ? `<div class="banner warn">The customer's text looked like an attempt to instruct the agent. Treat it as data.</div>` : ""}
+    <h2>Customer's words <span class="mut">(untrusted)</span></h2><pre>${esc(c.description)}</pre>
+
+    <h2>Why it is here</h2>
+    ${g ? `<p>Gate: <b>${esc(g.result)}</b>, bound by <span class="pill">${esc(g.rule_id)}</span>
+      · segment at <b>${esc(g.autonomy_mode)}</b> · ${esc(g.policy_version)}</p>
+      <details><summary class="mut">exact gate input</summary><pre>${esc(JSON.stringify(g.inputs_json, null, 2))}</pre></details>`
+      : `<p class="mut">No gate evaluation recorded.</p>`}
+
+    <h2>The agent</h2>
+    ${r ? `<p><b>${esc(r.outcome)}</b> at ${esc(r.confidence)} by ${esc(r.model)}</p><pre>${esc(r.rationale)}</pre>`
+        : `<p class="mut">No recommendation — the proposer did not produce one.</p>`}
+    ${k ? `<p>Critic (${esc(k.model)}): <b>${k.dissents ? "dissents" : "agrees"}</b></p>
+      ${(k.unsupported_claims || []).map(u => `<div class="banner warn">Unsupported: ${esc(u)}</div>`).join("")}
+      ${k.notes ? `<pre>${esc(k.notes)}</pre>` : ""}` : ""}
+
+    <h2>Evidence ${b && b.hash ? `<span class="pill ok">bundle ${esc(b.hash.slice(0,12))} · hash verified</span>` : ""}</h2>
+    ${!b ? `<p class="mut">No frozen bundle.</p>` : b.error ? `<div class="banner bad">Bundle could not be loaded: ${esc(b.error)}</div>` :
+      b.fragments.map(f => `<details><summary><b>${esc(f.kind)}</b> from ${esc(f.source)}
+        <span class="mut">${esc(f.ref)}</span>${f.degraded ? ' <span class="pill warn">degraded</span>' : ""}
+        ${(r && r.evidence_refs || []).includes(f.ref) ? ' <span class="pill">cited</span>' : ""}</summary>
+        <pre>${esc(JSON.stringify(f.data, null, 2))}</pre></details>`).join("")}
+
+    <h2>Decision</h2>
+    ${pending ? `<p><select id="outcome"><option>APPROVE</option><option>REJECT</option></select>
+      <select id="reason"></select> <button id="send">Record decision</button></p>`
+      : v.decisions.map(d => `<p><b>${esc(d.outcome)}</b> by ${esc(d.actor_id)} (${esc(d.actor_type)})
+          ${d.override_reason_code ? `· ${esc(d.override_reason_code)}` : ""}</p>`).join("") || `<p class="mut">None yet.</p>`}
+
+    <h2>Audit trail</h2>
+    ${v.audit.map(a => `<details><summary>#${esc(a.seq)} <b>${esc(a.event_type)}</b> by ${esc(a.actor)}
+      <span class="mut">${esc(a.at)}</span></summary><pre>${esc(JSON.stringify(a.payload_json, null, 2))}</pre></details>`).join("")}`;
+  if (!pending) return;
+  const fill = () => { $("reason").innerHTML = REASONS[$("outcome").value].map(x => `<option>${x}</option>`).join(""); };
+  $("outcome").onchange = fill; fill();
+  $("send").onclick = async () => {
+    const res = await post(`/v1/review/cases/${id}/decision`, {outcome: $("outcome").value, reason_code: $("reason").value});
+    if (!res.ok) { alert(await res.text()); return; }
+    await queue(); show(id);
+  };
+}
+
+header(); queue();
+</script>

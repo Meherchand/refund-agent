@@ -1,0 +1,72 @@
+# Application code references aliases only, never a raw model id. The resolved
+# id is what lands in the trace and in recommendations.model, so swapping a
+# model is a config edit plus a replay run — not a code change.
+#
+# Measured against the gateway on 2026-09-20 (see infra/local/capability-report.json
+# for P1/P6, and §9 of PLANNING-LOCAL.md for the full delta list). This fleet is
+# shared and shifts under us: several ids in the catalogue return 503 because
+# nothing is deployed behind them. Anything listed here answered on the day; the
+# `fallbacks` block is what runs when it stops answering.
+aliases:
+  # Proposer. OpenAI lineage — the half of the cross-family pair that decides.
+  reasoner-primary:
+    model: "openai/gpt-oss-120b"
+    params: {temperature: 0}
+
+  # Critic. MUST stay a different lineage from reasoner-primary: a critic that
+  # shares the proposer's pretraining shares its blind spots, and the critique
+  # step degenerates into agreement. Kimi (Moonshot) was the original pick and
+  # is down as of 2026-09-20 — 503, no healthy deployment. Sahabat-AI-v2-70B-R
+  # is a Llama derivative, so the pair is OpenAI vs Meta and independence holds.
+  reasoner-critic:
+    model: "GoToCompany/Llama-Sahabat-AI-v2-70B-R"
+    params: {temperature: 0}
+
+  # Native OpenAI tool calling — P1 PASS, branch A (see capability-report.json).
+  # Qwen3 emits <think> into content unless thinking is switched off at the
+  # chat template; with tools that corrupts the tool_calls parse.
+  tool-caller:
+    model: "Qwen/Qwen3-14B"
+    params: {temperature: 0, extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+  analyst:
+    model: "Qwen/Qwen3-14B"
+    params: {temperature: 0, extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+  fast-utility:
+    model: "Qwen/Qwen3-8B"
+    params: {temperature: 0, extra_body: {chat_template_kwargs: {enable_thinking: false}}}
+
+  # Qwen3-VL-8B-Thinking is the real vision model and is 503. Qwen3.8-27B answers
+  # but is not confirmed multimodal (P3 never ran), so image_analyst is expected
+  # to degrade and photo cases to escalate. That is the designed failure, not a bug.
+  vision:
+    model: "Qwen/Qwen3.8-27B"
+    params: {temperature: 0}
+
+  # P6 PASS: dim=1024, which is what `policy_clauses.embedding vector(1024)` in
+  # infra/local/schema.sql is already declared as. Changing this alias means a
+  # schema migration, not just a config edit.
+  embed:
+    model: "Alibaba-NLP/gte-large-en-v1.5"
+    dim: 1024
+
+  # Safety classifier. The -prod deployment is warm (0.4s); the bare id cold-starts
+  # at ~98s, which blows the node budget. Returns "safe" / "unsafe\nS<n>".
+  guard-safety:
+    model: "meta-llama/Llama-Guard-3-1B-prod"
+    api: chat
+
+# meta-llama-prompt-guard-86m is NOT deployed on this gateway — 400, "no healthy
+# deployments". There is therefore no model-based prompt-injection classifier
+# available, so `injection_check` falls back to a deterministic pattern screen and
+# reports degraded=True. Llama Guard is deliberately NOT reused for this: it
+# classifies harm categories, not instruction-hijacking, and a clean "safe" from
+# it says nothing about whether the text is trying to steer the agent.
+fallbacks:
+  reasoner-primary: ["GoToCompany/Llama-Sahabat-AI-v2-70B-R"]
+  reasoner-critic: ["GoToCompany/gemma3-27b-sahabat-instruct"]   # Google lineage — still not OpenAI
+  tool-caller: ["
+  GoToCompany/Llama-Sahabat-AI-v2-70B-IT-awq-4bit"]
+  analyst: ["GoToCompany/gemma3-27b-sahabat-instruct"]
+  fast-utility: ["Qwen/Qwen3-14B"]
+  vision: ["GoToCompany/gemma3-27b-sahabat-instruct"]
+  guard-safety: ["meta-llama/Llama-Guard-3-1B-ct-prod", "meta-llama/Llama-Guard-3-1B"]
